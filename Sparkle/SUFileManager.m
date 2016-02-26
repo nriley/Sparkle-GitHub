@@ -558,19 +558,19 @@ static BOOL SUMakeRefFromURL(NSURL *url, FSRef *ref, NSError **error) {
     return YES;
 }
 
-- (BOOL)changeOwnerAndGroupOfItemAtRootURL:(NSURL *)targetURL toMatchURL:(NSURL *)matchURL error:(NSError * __autoreleasing *)error
+- (BOOL)changeOwnerAndGroup:(BOOL)changeGroup ofItemAtRootURL:(NSURL *)targetURL toMatchURL:(NSURL *)matchURL error:(NSError * __autoreleasing *)error
 {
     BOOL isTargetADirectory = NO;
     if (![self _itemExistsAtURL:targetURL isDirectory:&isTargetADirectory]) {
         if (error != NULL) {
-            *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileNoSuchFileError userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to change owner & group IDs because %@ does not exist.", targetURL.path.lastPathComponent] }];
+            *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileNoSuchFileError userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to change %@ because %@ does not exist.", changeGroup ? @"owner & group IDs" : @"owner ID", targetURL.path.lastPathComponent] }];
         }
         return NO;
     }
 
     if (![self _itemExistsAtURL:matchURL]) {
         if (error != NULL) {
-            *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileNoSuchFileError userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to match owner & group IDs because %@ does not exist.", matchURL.path.lastPathComponent] }];
+            *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileNoSuchFileError userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to match %@ because %@ does not exist.", changeGroup ? @"owner & group IDs" : @"owner ID", matchURL.path.lastPathComponent] }];
         }
         return NO;
     }
@@ -604,22 +604,33 @@ static BOOL SUMakeRefFromURL(NSURL *url, FSRef *ref, NSError **error) {
         return NO;
     }
 
-    NSNumber *groupID = matchFileAttributes[NSFileGroupOwnerAccountID];
-    if (groupID == nil) {
-        // shouldn't be possible to error here, but just in case
-        if (error != NULL) {
-            *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileReadNoPermissionError userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Group ID could not be read from %@.", matchURL.path.lastPathComponent] }];
+    NSNumber *groupID;
+    if (changeGroup) {
+        groupID = matchFileAttributes[NSFileGroupOwnerAccountID];
+        if (groupID == nil) {
+            // shouldn't be possible to error here, but just in case
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileReadNoPermissionError userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Group ID could not be read from %@.", matchURL.path.lastPathComponent] }];
+            }
+            return NO;
         }
-        return NO;
+    } else {
+        groupID = @-1;
     }
 
     NSNumber *targetOwnerID = targetFileAttributes[NSFileOwnerAccountID];
-    NSNumber *targetGroupID = targetFileAttributes[NSFileGroupOwnerAccountID];
 
-    if ((targetOwnerID != nil && [ownerID isEqualToNumber:targetOwnerID]) && (targetGroupID != nil && [groupID isEqualToNumber:targetGroupID])) {
-        // Assume they're the same even if we don't check every file recursively
-        // Speeds up the common case
-        return YES;
+    // Assume they're the same even if we don't check every file recursively
+    // Speeds up the common case
+    if (targetOwnerID != nil && [ownerID isEqualToNumber:targetOwnerID]) {
+        if (changeGroup) {
+            NSNumber *targetGroupID = targetFileAttributes[NSFileGroupOwnerAccountID];
+            if (targetGroupID != nil && [groupID isEqualToNumber:targetGroupID]) {
+                return YES;
+            }
+        } else {
+            return YES;
+        }
     }
 
     BOOL needsAuth = NO;
@@ -654,7 +665,12 @@ static BOOL SUMakeRefFromURL(NSURL *url, FSRef *ref, NSError **error) {
     }
 
     char userAndGroup[100];
-    int written = snprintf(userAndGroup, sizeof(userAndGroup), "%u:%u", ownerID.unsignedIntValue, groupID.unsignedIntValue);
+    int written;
+    if (changeGroup) {
+        written = snprintf(userAndGroup, sizeof(userAndGroup), "%u:%u", ownerID.unsignedIntValue, groupID.unsignedIntValue);
+    } else {
+        written = snprintf(userAndGroup, sizeof(userAndGroup), "%u", ownerID.unsignedIntValue);
+    }
     if (written < 0 || written >= 100) {
         return NO; // No custom error, because it's too unlikely to ever happen
     }
@@ -665,11 +681,21 @@ static BOOL SUMakeRefFromURL(NSURL *url, FSRef *ref, NSError **error) {
 
     BOOL success = AuthorizationExecuteWithPrivilegesAndWait(_auth, "/usr/sbin/chown", kAuthorizationFlagDefaults, (char *[]){ "-R", userAndGroup, targetPath, NULL });
     if (!success && error != NULL) {
-        NSString *errorMessage = [NSString stringWithFormat:@"Failed to change owner:group %@ on %@ with authentication.", [NSString stringWithUTF8String:userAndGroup], targetURL.path.lastPathComponent];
+        NSString *errorMessage = [NSString stringWithFormat:@"Failed to change %@ %@ on %@ with authentication.", changeGroup ? @"owner:group" : @"owner", [NSString stringWithUTF8String:userAndGroup], targetURL.path.lastPathComponent];
         *error = [NSError errorWithDomain:SUSparkleErrorDomain code:SUAuthenticationFailure userInfo:@{ NSLocalizedDescriptionKey: errorMessage }];
     }
 
     return success;
+}
+
+- (BOOL)changeOwnerOfItemAtRootURL:(NSURL *)targetURL toMatchURL:(NSURL *)matchURL error:(NSError * __autoreleasing *)error
+{
+    return [self changeOwnerAndGroup:NO ofItemAtRootURL:targetURL toMatchURL:matchURL error:error];
+}
+
+- (BOOL)changeOwnerAndGroupOfItemAtRootURL:(NSURL *)targetURL toMatchURL:(NSURL *)matchURL error:(NSError * __autoreleasing *)error
+{
+    return [self changeOwnerAndGroup:YES ofItemAtRootURL:targetURL toMatchURL:matchURL error:error];
 }
 
 // /usr/bin/touch can be used to update an application, as described in:
@@ -882,7 +908,7 @@ static BOOL SUMakeRefFromURL(NSURL *url, FSRef *ref, NSError **error) {
         return NO;
     }
 
-    if (![self changeOwnerAndGroupOfItemAtRootURL:tempItemURL toMatchURL:trashURL error:error]) {
+    if (![self changeOwnerOfItemAtRootURL:tempItemURL toMatchURL:trashURL error:error]) {
         // Removing the item inside of the temp directory is better than trying to move the item to the trash with incorrect ownership
         [self removeItemAtURL:tempDirectory error:NULL];
         return NO;

@@ -86,6 +86,21 @@
 - (BOOL)removeItemAtURL:(NSURL *)url error:(NSError **)error;
 
 /**
+ * Changes the owner ID of an item at a specified target URL to match another URL
+ * @param targetURL A URL pointing to the target item whose owner ID to alter. This will be applied recursively if the item is a directory. The item at this URL must exist.
+ * @param matchURL A URL pointing to the item whose owner ID will be used for changing on the targetURL. The item at this URL must exist.
+ * @param error If an error occurs, upon returns contains an NSError object that describes the problem. If you are not interested in possible errors, you may pass in NULL.
+ * @return YES if the target item's owner ID has changed to match the origin's ones, otherwise NO along with a populated error object
+ *
+ * If the owner ID matches on the root items of targetURL and matchURL, this method stops and assumes that nothing needs to be done.
+ * Otherwise this method recursively changes the ID if the target is a directory. If an item in the directory is encountered that is unable to be changed,
+ * then this method stops and returns NO.
+ *
+ * This is not an atomic operation.
+ */
+- (BOOL)changeOwnerOfItemAtRootURL:(NSURL *)targetURL toMatchURL:(NSURL *)matchURL error:(NSError **)error;
+
+/**
  * Changes the owner and group IDs of an item at a specified target URL to match another URL
  * @param targetURL A URL pointing to the target item whose owner and group IDs to alter. This will be applied recursively if the item is a directory. The item at this URL must exist.
  * @param matchURL A URL pointing to the item whose owner and group IDs will be used for changing on the targetURL. The item at this URL must exist.
